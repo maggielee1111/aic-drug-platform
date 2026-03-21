@@ -1,8 +1,8 @@
 """
-AIC Drug Repurposing Platform — Interactive Dashboard
-=====================================================
-Reads directly from clinicaltrials_cardiomyopathy_drugs_results_aggregated.csv
-(production output from your LLM pipeline).
+TaosLab Drug Repurposing Platform
+==================================
+LLM-guided drug repurposing across diseases.
+Currently featuring: Anthracycline-Induced Cardiotoxicity (AIC).
 
 Run: streamlit run app.py
 """
@@ -15,8 +15,8 @@ import plotly.graph_objects as go
 
 # ── Page config ──────────────────────────────────────────────────
 st.set_page_config(
-    page_title="AIC Drug Repurposing Platform",
-    page_icon="💊",
+    page_title="PriorRx: AI-Prioritized Drug Repurposing Candidates Platform",
+    page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -25,29 +25,36 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        background: linear-gradient(135deg, #1B3A5C 0%, #2A7F8E 100%);
-        padding: 1.5rem 2rem;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #0D1B2A 0%, #1B3A5C 40%, #2A7F8E 100%);
+        padding: 1.8rem 2.2rem;
+        border-radius: 12px;
         margin-bottom: 1.5rem;
         color: white;
     }
-    .main-header h1 { color: white; margin: 0; font-size: 1.8rem; }
-    .main-header p { color: #B0D4E8; margin: 0.3rem 0 0 0; font-size: 0.95rem; }
+    .main-header h1 { color: white; margin: 0; font-size: 1.9rem; letter-spacing: 0.5px; }
+    .main-header .subtitle { color: #8EC8D8; margin: 0.2rem 0 0 0; font-size: 0.95rem; }
+    .main-header .disease-tag {
+        display: inline-block; background: rgba(255,255,255,0.15);
+        padding: 3px 12px; border-radius: 20px; font-size: 0.8rem;
+        color: #B0D4E8; margin-top: 0.5rem;
+    }
     .badge-positive { background: #E8F5E9; color: #2E7D32; padding: 3px 10px; border-radius: 4px; font-weight: 600; }
     .badge-adverse  { background: #FFEBEE; color: #C62828; padding: 3px 10px; border-radius: 4px; font-weight: 600; }
     .badge-neutral  { background: #FFF3E0; color: #E65100; padding: 3px 10px; border-radius: 4px; font-weight: 600; }
     .badge-nosign   { background: #ECEFF1; color: #546E7A; padding: 3px 10px; border-radius: 4px; font-weight: 600; }
-    .novel-card {
-        border: 2px solid #4CAF50;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        background: linear-gradient(135deg, #E8F5E9 0%, #F1F8E9 100%);
-    }
     .validated-badge {
         background: #FFD600; color: #333; padding: 2px 8px; border-radius: 4px;
         font-weight: 700; font-size: 0.75rem; vertical-align: middle;
     }
+    .pmid-link { color: #1565C0; text-decoration: none; font-weight: 600; }
+    .pmid-link:hover { text-decoration: underline; }
+    .abstract-card {
+        border-radius: 8px; padding: 0.8rem 1rem; margin: 0.4rem 0;
+        border-left: 4px solid; font-size: 0.9rem;
+    }
+    .abstract-positive { border-left-color: #4CAF50; background: #F1F8E9; }
+    .abstract-negative { border-left-color: #EF5350; background: #FFF8F7; }
+    .abstract-neutral  { border-left-color: #BDBDBD; background: #FAFAFA; }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -55,44 +62,43 @@ st.markdown("""
 
 
 # ── Load data ────────────────────────────────────────────────────
-CSV_PATH = os.path.join(os.path.dirname(__file__),
-                        "clinicaltrials_cardiomyopathy_drugs_results_aggregated.csv")
+BASE_DIR = os.path.dirname(__file__)
+DRUG_CSV = os.path.join(BASE_DIR, "clinicaltrials_cardiomyopathy_drugs_results_aggregated.csv")
+ABSTRACT_CSV = os.path.join(BASE_DIR, "Copy_of_realtime_abstract_analysis__1_.csv")
 
 @st.cache_data
-def load_data():
-    df = pd.read_csv(CSV_PATH)
-
-    # De-duplicate: keep first occurrence per (drug_name, Model)
+def load_drugs():
+    df = pd.read_csv(DRUG_CSV)
     df = df.drop_duplicates(subset=["drug_name", "Model"], keep="first")
-
-    # Fill NaN study-type columns with 0
-    study_cols = ["Human_Studies", "Animal_in_vivo_Studies", "In_vitro_Studies",
-                  "Review_Studies", "Computational_Studies", "Not_specified_Studies"]
-    for c in study_cols:
-        df[c] = df[c].fillna(0).astype(int)
-
-    # Clean rank
     df["rank"] = df["rank"].fillna(0).astype(int)
-    df["rank_learnprime"] = df["rank_learnprime"].fillna(0).astype(int)
-
-    # Boolean flag
     df["has_trial"] = df["has_clinical_trial"] == "Yes"
-
-    # Count number of models each drug appears in
     model_counts = df.groupby("drug_name")["Model"].nunique().rename("n_models")
     df = df.merge(model_counts, on="drug_name", how="left")
-
-    # Validated in vivo drugs from AIC paper
     df["validated_in_paper"] = df["drug_name"].isin(
         ["Cysteine", "Dasatinib", "Tranilast", "Tretinoin"]
     )
-
     return df
 
-df = load_data()
+@st.cache_data
+def load_abstracts():
+    if not os.path.exists(ABSTRACT_CSV):
+        return pd.DataFrame()
+    ab = pd.read_csv(ABSTRACT_CSV)
+    # Standardize column names
+    ab = ab.rename(columns={
+        "Drug_ID": "drug_id", "Drug_name": "drug_name",
+        "Disease_ID": "disease_id", "Disease_name": "disease_name",
+        "PubMed_ID": "pubmed_id", "Title": "title",
+        "Result": "result", "Explanation": "explanation",
+        "Raw_Output": "raw_output", "Model": "model"
+    })
+    return ab
 
+df = load_drugs()
+ab_df = load_abstracts()
 
-# ── Helper ───────────────────────────────────────────────────────
+VALIDATED_DRUGS = {"Cysteine", "Dasatinib", "Tranilast", "Tretinoin"}
+
 def badge(label):
     if label == "Potentially Therapeutic":
         return '<span class="badge-positive">✓ Potentially Therapeutic</span>'
@@ -104,8 +110,6 @@ def badge(label):
         return '<span class="badge-nosign">— No Positive Sign</span>'
     return f'<span class="badge-neutral">{label}</span>'
 
-VALIDATED_DRUGS = {"Cysteine", "Dasatinib", "Tranilast", "Tretinoin"}
-
 
 # ═══════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -113,11 +117,9 @@ VALIDATED_DRUGS = {"Cysteine", "Dasatinib", "Tranilast", "Tretinoin"}
 with st.sidebar:
     st.markdown("## 🔍 Filters")
 
-    models = st.multiselect(
-        "Graph model source",
-        sorted(df["Model"].unique()),
-        default=sorted(df["Model"].unique()),
-    )
+    models = st.multiselect("Graph model source",
+                            sorted(df["Model"].unique()),
+                            default=sorted(df["Model"].unique()))
 
     st.markdown("---")
     st.markdown("**LLM classification**")
@@ -133,13 +135,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**Clinical trial status**")
-    trial_opt = st.radio("Show drugs with trials", ["All", "Has trials", "No trials (novel)"],
-                         index=0)
+    trial_opt = st.radio("Show drugs with trials",
+                         ["All", "Has trials", "No trials (novel)"], index=0)
 
     st.markdown("---")
     search = st.text_input("🔎 Search drug name", "")
-
-    show_validated = st.checkbox("Highlight validated drugs", value=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -165,13 +165,13 @@ if search:
 # ═══════════════════════════════════════════════════════════════════
 st.markdown("""
 <div class="main-header">
-    <h1>💊 AIC Drug Repurposing Platform</h1>
-    <p>LLM-guided prioritization of therapeutics for Anthracycline-Induced Cardiotoxicity
-    &nbsp;·&nbsp; Union-then-Filter framework &nbsp;·&nbsp; TxGNN + CompGCN + RLR on PrimeKG</p>
+    <h1>🧬 PriorRx: AI-Prioritized Drug Repurposing Candidates Platform</h1>
+    <p class="subtitle">AI-prioritized drug repurposing through graph learning and LLM-guided evidence synthesis</p>
+    <span class="disease-tag">📌 Current module: Anthracycline-Induced Cardiotoxicity (AIC)</span>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Metrics ──────────────────────────────────────────────────────
+# Metrics
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Total entries", len(df))
 m2.metric("Showing", len(filt))
@@ -199,8 +199,6 @@ with tab_table:
         "drug_name", "Model", "rank", "Criterion_1", "Criterion_2",
         "Analyzed", "Positive", "Neutral", "Negative",
         "Rate_Positive", "Rate_Negative",
-        "Human_Studies", "Animal_in_vivo_Studies", "In_vitro_Studies",
-        "Review_Studies", "Computational_Studies",
         "has_clinical_trial", "clinical_trial_count",
     ]].copy()
 
@@ -208,8 +206,6 @@ with tab_table:
         "Drug", "Model", "Rank", "Criterion 1", "Criterion 2",
         "Analyzed", "Pos", "Neu", "Neg",
         "Rp", "Rn",
-        "Human", "Animal", "In vitro",
-        "Review", "Comput.",
         "Trial?", "# Trials",
     ]
 
@@ -251,7 +247,7 @@ with tab_viz:
                       color_discrete_map=cmap1, barmode="stack",
                       labels={"count": "Drugs", "Criterion_1": ""})
         fig1.update_layout(height=340, margin=dict(t=10, b=30),
-                           legend=dict(orientation="h", y=-0.2))
+                           legend=dict(orientation="h", y=-0.25))
         st.plotly_chart(fig1, use_container_width=True)
 
     with v2:
@@ -263,40 +259,39 @@ with tab_viz:
                       color_discrete_map=cmap2, barmode="stack",
                       labels={"count": "Drugs", "Criterion_2": ""})
         fig2.update_layout(height=340, margin=dict(t=10, b=30),
-                           legend=dict(orientation="h", y=-0.2))
+                           legend=dict(orientation="h", y=-0.25))
         st.plotly_chart(fig2, use_container_width=True)
 
-    # Evidence type pie (only rows with study type data)
-    st.markdown("#### Study type distribution across all abstracts")
-    study_sums = filt[["Human_Studies", "Animal_in_vivo_Studies", "In_vitro_Studies",
-                       "Review_Studies", "Computational_Studies", "Not_specified_Studies"]].sum()
-    study_labels = ["Human", "Animal in vivo", "In vitro", "Review", "Computational", "Not specified"]
-    if study_sums.sum() > 0:
-        fig3 = px.pie(values=study_sums.values, names=study_labels,
-                      color_discrete_sequence=px.colors.qualitative.Set2)
-        fig3.update_layout(height=350, margin=dict(t=10, b=10))
-        st.plotly_chart(fig3, use_container_width=True)
-    else:
-        st.info("Study type data not yet available for the selected drugs. "
-                "Run `2.1llm_abstract_analysis_with_study_type.py` to populate.")
-
-    # Scatter: score vs. positive rate
+    # Scatter: rank vs positive rate
     st.markdown("#### Positive rate (Rp) by model rank")
     scatter = filt[filt["rank"] > 0].copy()
     if not scatter.empty:
-        scatter["label"] = scatter["drug_name"]
-        scatter.loc[~scatter["validated_in_paper"], "label"] = ""
+        scatter["label"] = scatter.apply(
+            lambda r: r["drug_name"] if r["validated_in_paper"] else "", axis=1)
         fig4 = px.scatter(scatter, x="rank", y="Rate_Positive",
                           color="Model", size="Analyzed",
-                          hover_name="drug_name",
-                          text="label",
+                          hover_name="drug_name", text="label",
                           labels={"rank": "Model rank (lower = higher priority)",
                                   "Rate_Positive": "Positive rate (Rp)",
-                                  "Analyzed": "Abstracts analyzed"},
+                                  "Analyzed": "Abstracts"},
                           color_discrete_sequence=["#1B3A5C", "#2A7F8E", "#E8734A"])
         fig4.update_traces(textposition="top center", textfont_size=11)
         fig4.update_layout(height=420, margin=dict(t=10, b=30))
         st.plotly_chart(fig4, use_container_width=True)
+
+    # Top drugs by positive count
+    st.markdown("#### Top drugs by positive abstract count")
+    top_pos = filt[filt["Positive"] > 0].sort_values("Positive", ascending=True).tail(15)
+    if not top_pos.empty:
+        fig5 = px.bar(top_pos, y="drug_name", x="Positive", orientation="h",
+                      color="Criterion_2",
+                      color_discrete_map={"Potentially Therapeutic": "#4CAF50",
+                                          "No Positive Sign": "#BDBDBD"},
+                      hover_data=["Model", "Analyzed", "Rate_Positive"],
+                      labels={"drug_name": "", "Positive": "Positive abstracts"})
+        fig5.update_layout(height=400, margin=dict(t=10, b=30, l=140),
+                           showlegend=True, legend=dict(orientation="h", y=-0.15))
+        st.plotly_chart(fig5, use_container_width=True)
 
 
 # ─── TAB 3: DRUG DETAIL ─────────────────────────────────────────
@@ -307,7 +302,6 @@ with tab_detail:
     if not drug_names:
         st.warning("No drugs match current filters.")
     else:
-        # Pre-select a validated drug if available
         default_idx = 0
         for i, d in enumerate(drug_names):
             if d in VALIDATED_DRUGS:
@@ -318,16 +312,14 @@ with tab_detail:
         rows = filt[filt["drug_name"] == selected]
         row = rows.iloc[0]
 
-        # Header
+        # ── Header ──
         hc1, hc2, hc3 = st.columns([2, 1, 1])
         with hc1:
-            title_extra = ""
-            if row["validated_in_paper"]:
-                title_extra = ' <span class="validated-badge">✓ VALIDATED IN VIVO</span>'
-            st.markdown(f"## {selected}{title_extra}", unsafe_allow_html=True)
+            v_extra = (' <span class="validated-badge">✓ VALIDATED IN VIVO</span>'
+                       if row["validated_in_paper"] else "")
+            st.markdown(f"## {selected}{v_extra}", unsafe_allow_html=True)
             if len(rows) > 1:
-                models_str = ", ".join(rows["Model"].tolist())
-                st.markdown(f"Appears in **{len(rows)} models**: {models_str}")
+                st.markdown(f"Appears in **{len(rows)} models**: {', '.join(rows['Model'].tolist())}")
         with hc2:
             st.markdown(f"**Model:** {row['Model']}")
             st.markdown(f"**Rank:** #{row['rank']}" if row['rank'] > 0 else "**Rank:** N/A")
@@ -337,7 +329,7 @@ with tab_detail:
 
         st.markdown("---")
 
-        # Evidence rates
+        # ── Evidence rates ──
         ec1, ec2, ec3, ec4 = st.columns(4)
         ec1.metric("Abstracts analyzed", int(row["Analyzed"]))
         ec2.metric("Rp (positive rate)", f"{row['Rate_Positive']:.1%}",
@@ -346,33 +338,78 @@ with tab_detail:
         ec4.metric("Rn (negative rate)", f"{row['Rate_Negative']:.1%}",
                    delta=f"{int(row['Negative'])} negative", delta_color="inverse")
 
-        # Study type breakdown
-        st.markdown("#### Study type breakdown")
-        study_data = {
-            "Human": int(row["Human_Studies"]),
-            "Animal in vivo": int(row["Animal_in_vivo_Studies"]),
-            "In vitro": int(row["In_vitro_Studies"]),
-            "Review": int(row["Review_Studies"]),
-            "Computational": int(row["Computational_Studies"]),
-            "Not specified": int(row["Not_specified_Studies"]),
-        }
-        if sum(study_data.values()) > 0:
-            fig_bar = go.Figure(go.Bar(
-                x=list(study_data.keys()),
-                y=list(study_data.values()),
-                marker_color=["#2E7D32", "#66BB6A", "#81C784", "#A5D6A7", "#C8E6C9", "#E0E0E0"],
-                text=list(study_data.values()),
-                textposition="outside",
-            ))
-            fig_bar.update_layout(height=260, margin=dict(t=10, b=30, l=40, r=10),
-                                  yaxis_title="Abstract count",
-                                  plot_bgcolor="rgba(0,0,0,0)",
-                                  paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            st.info("Study type data not available — run script 2.1 for this drug.")
+        # ── Abstract Evidence Drill-down ──
+        drug_abstracts = ab_df[ab_df["drug_name"] == selected] if not ab_df.empty else pd.DataFrame()
 
-        # Clinical trials
+        if not drug_abstracts.empty:
+            st.markdown("---")
+
+            # Positive abstracts
+            pos_abs = drug_abstracts[drug_abstracts["result"] == "Positive"]
+            neg_abs = drug_abstracts[drug_abstracts["result"] == "Negative"]
+            neu_abs = drug_abstracts[drug_abstracts["result"] == "Neutral"]
+
+            st.markdown(f"#### 📑 Evidence sources — "
+                        f"🟢 {len(pos_abs)} Positive · "
+                        f"🔴 {len(neg_abs)} Negative · "
+                        f"⚪ {len(neu_abs)} Neutral")
+
+            # Show selector
+            show_which = st.radio(
+                "Show abstracts",
+                ["🟢 Positive", "🔴 Negative", "⚪ Neutral", "All"],
+                horizontal=True, index=0,
+                key=f"abs_radio_{selected}"
+            )
+
+            if show_which == "🟢 Positive":
+                show_abs = pos_abs
+            elif show_which == "🔴 Negative":
+                show_abs = neg_abs
+            elif show_which == "⚪ Neutral":
+                show_abs = neu_abs
+            else:
+                show_abs = drug_abstracts
+
+            if show_abs.empty:
+                st.info(f"No {show_which.split(' ')[1].lower()} abstracts for this drug.")
+            else:
+                for _, a in show_abs.iterrows():
+                    result = a["result"]
+                    pmid = str(a["pubmed_id"])
+                    title = str(a.get("title", ""))
+                    explanation = str(a.get("explanation", ""))
+                    model = str(a.get("model", ""))
+
+                    if result == "Positive":
+                        css_class = "abstract-positive"
+                        icon = "🟢"
+                    elif result == "Negative":
+                        css_class = "abstract-negative"
+                        icon = "🔴"
+                    else:
+                        css_class = "abstract-neutral"
+                        icon = "⚪"
+
+                    pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+
+                    st.markdown(f"""
+                    <div class="abstract-card {css_class}">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+                            <span>{icon} <strong>{result}</strong>
+                                &nbsp;·&nbsp; Model: {model}</span>
+                            <a href="{pubmed_url}" target="_blank" class="pmid-link">PMID: {pmid} ↗</a>
+                        </div>
+                        <div style="font-weight:500; margin-bottom:0.3rem;">{title}</div>
+                        <div style="color:#555; font-size:0.85rem;">{explanation if explanation != 'nan' else ''}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        else:
+            st.info("Abstract-level data not loaded. Place `Copy_of_realtime_abstract_analysis__1_.csv` "
+                    "in the app directory to enable drill-down.")
+
+        # ── Clinical trials ──
+        st.markdown("---")
         has_t = row["has_clinical_trial"] == "Yes"
         trial_count = int(row["clinical_trial_count"])
         st.markdown(f"#### Clinical trials ({trial_count} found)")
@@ -381,9 +418,7 @@ with tab_detail:
             trial_title = str(row.get("trial_title", ""))
             trial_phase = str(row.get("study_phase", ""))
             trial_status = str(row.get("trial_status", ""))
-            trial_conditions = str(row.get("trial_conditions", ""))
 
-            # Parse multiple trials (separated by ||)
             ids = [x.strip() for x in trial_ids.split("||")] if trial_ids and trial_ids != "nan" else []
             titles = [x.strip() for x in trial_title.split("||")] if trial_title and trial_title != "nan" else []
             phases = [x.strip() for x in trial_phase.split("||")] if trial_phase and trial_phase != "nan" else []
@@ -398,18 +433,11 @@ with tab_detail:
                     "Title": titles[i] if i < len(titles) else "",
                 })
             if trial_rows:
-                trial_df = pd.DataFrame(trial_rows)
-                st.dataframe(trial_df, use_container_width=True, hide_index=True)
-
-            if row.get("additional_trials") and str(row["additional_trials"]) != "nan":
-                st.caption(f"Additional trials: {row['additional_trials']}")
+                st.dataframe(pd.DataFrame(trial_rows), use_container_width=True, hide_index=True)
         else:
-            st.success(
-                "🌟 **Novel candidate** — no existing AIC-related clinical trials found. "
-                "This drug may represent a new repurposing opportunity."
-            )
+            st.success("🌟 **Novel candidate** — no existing AIC-related clinical trials found.")
 
-        # If drug appears in multiple models, show comparison
+        # Cross-model comparison
         if len(rows) > 1:
             st.markdown("#### Cross-model comparison")
             compare_cols = ["Model", "rank", "Analyzed", "Positive", "Neutral", "Negative",
@@ -419,11 +447,11 @@ with tab_detail:
 
 # ─── TAB 4: NOVEL CANDIDATES ────────────────────────────────────
 with tab_novel:
-    st.markdown("### 🌟 Novel candidates — Potentially Therapeutic (C2) with no clinical trials")
+    st.markdown("### 🌟 Novel candidates — Therapeutic (C2) with no clinical trials")
     st.markdown(
-        "These drugs have positive evidence signals in the literature but have **not been tested** "
-        "in AIC-related clinical trials. This is the exact filter that identified **Cysteine, "
-        "Dasatinib, Tranilast, and Tretinoin** in the original study."
+        "Drugs with positive literature signals but **no AIC-related clinical trials**. "
+        "This filter identified **Cysteine, Dasatinib, Tranilast, and Tretinoin** — "
+        "all subsequently validated in vivo."
     )
 
     novel = filt[
@@ -434,41 +462,52 @@ with tab_novel:
         st.info("No novel candidates match current filters.")
     else:
         for _, r in novel.iterrows():
-            is_validated = r["drug_name"] in VALIDATED_DRUGS
-            border_color = "#FFD600" if is_validated else "#4CAF50"
+            is_val = r["drug_name"] in VALIDATED_DRUGS
+            border_color = "#FFD600" if is_val else "#4CAF50"
             v_badge = (' <span class="validated-badge">✓ VALIDATED IN VIVO</span>'
-                       if is_validated else "")
+                       if is_val else "")
+            bg = ('linear-gradient(135deg, #FFFDE7 0%, #FFF9C4 100%)' if is_val
+                  else 'linear-gradient(135deg, #E8F5E9 0%, #F1F8E9 100%)')
+
+            # Get positive PMIDs for this drug
+            pmid_links = ""
+            if not ab_df.empty:
+                pos_for_drug = ab_df[(ab_df["drug_name"] == r["drug_name"]) & (ab_df["result"] == "Positive")]
+                if not pos_for_drug.empty:
+                    links = []
+                    for _, pa in pos_for_drug.iterrows():
+                        pid = str(pa["pubmed_id"])
+                        links.append(f'<a href="https://pubmed.ncbi.nlm.nih.gov/{pid}/" '
+                                     f'target="_blank" class="pmid-link">{pid}</a>')
+                    pmid_links = f'<div style="margin-top:0.4rem; font-size:0.82rem; color:#666;">Positive evidence PMIDs: {" · ".join(links)}</div>'
 
             st.markdown(f"""
             <div style="border: 2px solid {border_color}; border-radius: 10px;
-                        padding: 1rem; margin: 0.5rem 0;
-                        background: {'linear-gradient(135deg, #FFFDE7 0%, #FFF9C4 100%)' if is_validated
-                                      else 'linear-gradient(135deg, #E8F5E9 0%, #F1F8E9 100%)'} ">
+                        padding: 1rem; margin: 0.5rem 0; background: {bg};">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <strong style="font-size: 1.1rem;">{r['drug_name']}</strong>{v_badge}
                         &nbsp;&nbsp;
                         <span style="color: #666;">({r['Model']}, rank #{int(r['rank']) if r['rank']>0 else 'N/A'})</span>
                     </div>
-                    <div>
-                        {badge(r['Criterion_1'])} &nbsp; {badge(r['Criterion_2'])}
-                    </div>
+                    <div>{badge(r['Criterion_1'])} &nbsp; {badge(r['Criterion_2'])}</div>
                 </div>
                 <div style="margin-top: 0.5rem; font-size: 0.9rem; color: #555;">
                     Analyzed: <strong>{int(r['Analyzed'])}</strong> abstracts &nbsp;|&nbsp;
                     Positive: <strong>{int(r['Positive'])}</strong> ({r['Rate_Positive']:.1%}) &nbsp;|&nbsp;
                     Neutral: <strong>{int(r['Neutral'])}</strong> &nbsp;|&nbsp;
                     Negative: <strong>{int(r['Negative'])}</strong>
-                    {"&nbsp;|&nbsp; Human: <strong>" + str(int(r['Human_Studies'])) + "</strong> &nbsp;|&nbsp; Animal: <strong>" + str(int(r['Animal_in_vivo_Studies'])) + "</strong>" if r['Human_Studies'] > 0 or r['Animal_in_vivo_Studies'] > 0 else ""}
                 </div>
+                {pmid_links}
             </div>
             """, unsafe_allow_html=True)
 
         st.markdown("---")
+        n_validated = len(novel[novel["validated_in_paper"]])
         st.markdown(
             f"**{len(novel)} novel candidates** identified. "
-            f"Of these, **{len(novel[novel['validated_in_paper']])}** were subsequently validated "
-            f"in vivo (Dasatinib via eAIC zebrafish model; Cysteine, Tranilast, Tretinoin via aAIC zebrafish model)."
+            f"**{n_validated}** were validated in vivo "
+            f"(Dasatinib via eAIC zebrafish; Cysteine, Tranilast, Tretinoin via aAIC zebrafish)."
         )
 
 
@@ -476,9 +515,11 @@ with tab_novel:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #999; font-size: 0.8rem;'>"
-    "AIC Drug Repurposing Platform &nbsp;·&nbsp; Union-then-Filter Framework &nbsp;·&nbsp; "
-    "Data: 89 drug entries from TxGNN + CompGCN + RLR on PrimeKG &nbsp;·&nbsp; "
-    "LLM: GPT-4.1 (context-only prompting)"
+    "PriorRx: AI-Prioritized Drug Repurposing Candidates Platform &nbsp;·&nbsp; "
+    "Union-then-Filter Framework &nbsp;·&nbsp; "
+    "TxGNN + CompGCN + RLR on PrimeKG &nbsp;·&nbsp; "
+    "LLM: GPT-4.1 &nbsp;·&nbsp; "
+    "© 2025 TaosLab"
     "</div>",
     unsafe_allow_html=True
 )
