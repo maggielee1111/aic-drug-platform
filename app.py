@@ -194,6 +194,7 @@ tab_table, tab_viz, tab_detail, tab_novel = st.tabs(
 # ─── TAB 1: DRUG TABLE ───────────────────────────────────────────
 with tab_table:
     st.markdown("### All candidate drugs")
+    st.info("💡 **Tip:** Switch to the **🔬 Drug Detail** tab and select any drug to view individual abstract classifications, PubMed links, and LLM explanations.")
 
     display = filt[[
         "drug_name", "Model", "rank", "Criterion_1", "Criterion_2",
