@@ -223,8 +223,8 @@ with tab_table:
         return "background-color: #ECEFF1; color: #546E7A"
 
     styled = display.style\
-        .applymap(color_c1, subset=["Criterion 1"])\
-        .applymap(color_c2, subset=["Criterion 2"])\
+        .map(color_c1, subset=["Criterion 1"])\
+        .map(color_c2, subset=["Criterion 2"])\
         .format({"Rp": "{:.3f}", "Rn": "{:.3f}"})
 
     st.dataframe(styled, use_container_width=True, height=600)
